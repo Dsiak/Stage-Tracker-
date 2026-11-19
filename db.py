@@ -115,6 +115,28 @@ def get_companies():
 
     return companies
 
+def get_or_create_company(name):
+    """Récupère l'identifiant d'une entreprise ou la crée"""
+    conn= get_connection()
+    cursor=  conn.cursor()
+    
+    #chercher l'entreprise
+    cursor.execute("""
+    SELECT id
+    FROM companies
+    WHERE name = ? COLLATE NOCASE
+""", (name,))
+    company = cursor.fetchone()
+
+    conn.close()
+
+    #Si l'entreprise existe déjà
+    if company : 
+        return company[0]
+
+    #Sinon, créer l'entreprise 
+    return add_company(name)
+
 def update_company(company_id, name, website=None, location=None):
     """Modifie une entreprise existante."""
 
@@ -320,3 +342,164 @@ def get_offer_skills(offer_id):
     conn.close()
 
     return skills
+
+#Gestion des compétences associées à une offre de stage
+def get_or_create_skill(name):
+    """Récupère l'identifiant d'une compétence ou la crée"""
+    name -name.strip()
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Chercher la compétence
+    cursor.execute("""
+        SELECT id
+        FROM skills
+        WHERE name = ? COLLATE NOCASE
+    """, (name,))
+    skill = cursor.fetchone()
+
+    conn.close()
+
+    # Si la compétence existe déjà
+    if skill:
+        return skill[0]
+
+    # Sinon, créer la compétence
+    return add_skill(name)
+
+# Initialisation du suivi des candidatures
+def prepare_tracking():
+    """Ajoute le statut et l'historique sans supprimer les offres existantes."""
+    conn= get_connection()
+    cursor= conn.cursor()
+
+    #Vérifier si la colonne "status" existe déjà
+    cursor.execute("""
+        PRAGMA table_info(offers)
+    """)
+    columns = [column[1] for column in cursor.fetchall()]
+
+    if "status" not in columns:
+        cursor.execute("""
+            ALTER TABLE offers
+            ADD COLUMN status TEXT NOT NULL DEFAULT 'À postuler'
+        """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS offer_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            offer_id INTEGER NOT NULL,
+            old_status TEXT,
+            new_status TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (offer_id)
+                REFERENCES offers (id)
+                ON DELETE CASCADE
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+#Offres avec statut
+def get_offers_with_status():
+    """Récupère toutes les offres avec le nom de leur entreprise et leur statut"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            offers.id,
+            companies.name,
+            offers.title,
+            offers.description,
+            offers.url,
+            offers.location,
+            offers.deadline,
+            offers.status
+        FROM offers
+        JOIN companies ON offers.company_id = companies.id
+        ORDER BY offers.id DESC
+    """)
+
+    offers = cursor.fetchall()
+
+    conn.close()
+
+    return offers
+
+#Modification d'une candidature
+def update_offer_status(offer_id, new_status, note=""):
+    """Modifie le statut et conserve un historique."""
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT status
+        FROM offers
+        WHERE id = ?
+    """, (offer_id,))
+
+    result = cursor.fetchone()
+
+    if result is None:
+        conn.close()
+        return False
+
+    old_status = result[0]
+    note = note.strip()
+
+    if old_status == new_status and not note:
+        conn.close()
+        return False
+
+    try:
+        # Modifier le statut
+        cursor.execute("""
+            UPDATE offers
+            SET status = ?
+            WHERE id = ?
+        """, (new_status, offer_id))
+
+        # Enregistrer l'historique
+        cursor.execute("""
+            INSERT INTO offer_history
+            (offer_id, old_status, new_status, note)
+            VALUES (?, ?, ?, ?)
+        """, (
+            offer_id,
+            old_status,
+            new_status,
+            note
+        ))
+
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+#Historique des candidatures
+def get_offer_history(offer_id):
+    """Récupère l'historique des statuts d'une offre de stage."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT old_status, new_status, note, created_at
+        FROM offer_history
+        WHERE offer_id = ?
+        ORDER BY created_at DESC
+    """, (offer_id,))
+
+    history = cursor.fetchall()
+
+    conn.close()
+
+    return history 
